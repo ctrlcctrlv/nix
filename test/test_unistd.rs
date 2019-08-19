@@ -660,6 +660,50 @@ fn test_symlinkat() {
     );
 }
 
+#[cfg(not(any(target_os = "android",
+              target_os = "ios",
+              target_os = "macos",
+              target_env = "musl")))]
+
+#[test]
+fn test_users_iterator() {
+    let _m = ::USER_GRP_ITER_MTX.lock().expect("Mutex got poisoned by another test");
+
+    let entries = Users::default();
+    let users: Vec<Result<User, _>> = entries.collect();
+    let entries2 = Users::default();
+    let users2: Vec<Result<User, _>> = entries2.collect();
+    assert!(users == users2 && users.len() > 0);
+}
+
+#[cfg(not(any(target_os = "android",
+              target_os = "ios",
+              target_os = "macos",
+              target_env = "musl")))]
+
+#[test]
+fn test_groups_iterator() {
+    let _m = ::USER_GRP_ITER_MTX.lock().expect("Mutex got poisoned by another test");
+
+    let entries = Groups::default();
+    let groups: Vec<Result<Group, _>> = entries.collect();
+    let entries2 = Groups::default();
+    let groups2: Vec<Result<Group, _>> = entries2.collect();
+    assert!(groups == groups2 && groups.len() > 0);
+}
+
+#[cfg(not(any(target_os = "android",
+              target_os = "ios",
+              target_os = "macos",
+              target_env = "musl")))]
+#[test]
+/// This test sees what happens when we use a ridiculously small buffer.
+fn test_users_iterator_smallbuf() {
+    let _m = ::USER_GRP_ITER_MTX.lock().expect("Mutex got poisoned by another test");
+
+    let bufsize = 2;
+    assert!(Users::with_capacity(bufsize).next().unwrap().is_err());
+}
 
 #[test]
 fn test_unlinkat_dir_noremovedir() {

@@ -20,6 +20,11 @@ pub use self::pivot_root::*;
 #[cfg(any(target_os = "android", target_os = "freebsd",
           target_os = "linux", target_os = "openbsd"))]
 pub use self::setres::*;
+#[cfg(not(any(target_os = "android",
+              target_os = "ios",
+              target_os = "macos",
+              target_env = "musl")))]
+pub use self::usergroupiter::*;
 
 /// User identifier
 ///
@@ -2425,6 +2430,13 @@ pub fn access<P: ?Sized + NixPath>(path: &P, amode: AccessFlags) -> Result<()> {
     Errno::result(res).map(drop)
 }
 
+#[cfg(not(any(target_os = "android",
+              target_os = "ios",
+              target_os = "macos",
+              target_env = "musl")))]
+/// Default buffer size for system user and group querying functions
+const PWGRP_BUFSIZE: usize = 1024;
+
 /// Representation of a User, based on `libc::passwd`
 ///
 /// The reason some fields in this struct are `String` and others are `CString` is because some
@@ -2674,5 +2686,166 @@ impl Group {
         Group::from_anything(|grp, cbuf, cap, res| {
             unsafe { libc::getgrnam_r(name.as_ptr(), grp, cbuf, cap, res) }
         })
+    }
+}
+
+#[cfg(not(any(target_os = "android",
+              target_os = "ios",
+              target_os = "macos",
+              target_env = "musl")))]
+mod usergroupiter {
+    use libc::{self, c_char};
+    use Result;
+    use errno::Errno;
+    use super::{Error, User, Group, PWGRP_BUFSIZE};
+    use std::{mem, ptr};
+
+    /// Used to get all of the users on the system.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use nix::unistd::Users;
+    /// Users::default()
+    ///     .map(|e| e.map(|pw| println!("{}\t{}", pw.name, pw.uid)))
+    ///     .collect::<Vec<_>>();
+    ///
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// This iterator should not be used in different threads without synchronization; while doing so
+    /// will not cause undefined behavior, because modern systems lack re-entrant versions of
+    /// `setpwent` and `endpwent`, it is very likely that iterators running in different threads will
+    /// yield different numbers of items.
+    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+    pub struct Users(usize);
+
+    impl Default for Users {
+        fn default() -> Self {
+            Users::with_capacity(PWGRP_BUFSIZE)
+        }
+    }
+
+    impl Users {
+        /// Create a new `Users` instance with given capacity.
+        pub fn with_capacity(bufsize: usize) -> Self {
+            unsafe { libc::setpwent(); }
+            Users(bufsize)
+        }
+
+        /// Get the buffer size this `Users` instance was created with.
+        pub fn bufsize(&self) -> usize {
+            self.0
+        }
+    }
+
+    impl Iterator for Users {
+        type Item = Result<User>;
+        fn next(&mut self) -> Option<Result<User>> {
+            let mut cbuf = vec![0 as c_char; self.0];
+            let mut pwd = mem::MaybeUninit::<libc::passwd>::uninit();
+            let mut res = ptr::null_mut();
+
+            let error = unsafe {
+                Errno::clear();
+                libc::getpwent_r(
+                    pwd.as_mut_ptr(),
+                    cbuf.as_mut_ptr(),
+                    self.0,
+                    &mut res
+                )
+            };
+
+            let pwd = unsafe { pwd.assume_init() };
+
+            if error == 0 && !res.is_null() {
+                Some(Ok(User::from(&pwd)))
+            } else if error == libc::ERANGE {
+                Some(Err(Error::Sys(Errno::last())))
+            } else {
+                None
+            }
+        }
+    }
+
+    impl Drop for Users {
+        fn drop(&mut self) {
+            unsafe { libc::endpwent() };
+        }
+    }
+
+    /// Used to get all of the groups on the system.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use nix::unistd::Groups;
+    /// Groups::default()
+    ///      .map(|e| e.map(|gr| println!("{}\t{}", gr.name, gr.gid)))
+    ///      .collect::<Vec<_>>();
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// This iterator should not be used in different threads without synchronization; while doing so
+    /// will not cause undefined behavior, because modern systems lack re-entrant versions of
+    /// `setgrent` and `endgrent`, it is very likely that iterators running in different threads will
+    /// yield different numbers of items.
+    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+    pub struct Groups(usize);
+
+    impl Default for Groups {
+        fn default() -> Self {
+            Groups::with_capacity(PWGRP_BUFSIZE)
+        }
+    }
+
+    impl Groups {
+        /// Create a new `Groups` instance with given capacity.
+        pub fn with_capacity(bufsize: usize) -> Self {
+            unsafe { libc::setgrent(); }
+            Groups(bufsize)
+        }
+
+        /// Get the buffer size this `Users` instance was created with.
+        pub fn bufsize(&self) -> usize {
+            self.0
+        }
+    }
+
+    impl Iterator for Groups {
+        type Item = Result<Group>;
+        fn next(&mut self) -> Option<Result<Group>> {
+            let mut cbuf = vec![0 as c_char; self.0];
+            let mut grp = mem::MaybeUninit::<libc::group>::uninit();
+            let mut res = ptr::null_mut();
+
+            let error = unsafe {
+                Errno::clear();
+                libc::getgrent_r(
+                    grp.as_mut_ptr(),
+                    cbuf.as_mut_ptr(),
+                    self.0,
+                    &mut res
+                )
+            };
+
+            let grp = unsafe { grp.assume_init() };
+
+            if error == 0 && !res.is_null() {
+                Some(Ok(Group::from(&grp)))
+            } else if error == libc::ERANGE {
+                Some(Err(Error::Sys(Errno::last())))
+            } else {
+                None
+            }
+        }
+    }
+
+    impl Drop for Groups {
+        fn drop(&mut self) {
+            unsafe { libc::endgrent() };
+        }
     }
 }
